@@ -1,13 +1,13 @@
 /**!
- * N0nSnackbar: an simple jQuery Snackbar api 
+ * N0nSnackbar: an simple jQuery Snackbar api
  *
  * @author  N0nCreative
- * @version 1.0
+ * @version 1.1
  */
 window.N0nSnackbar = (function () {
     var $NAMESPACE = '$_n0nSnackbar';
 
-    var $defaults = {
+    var $defaultOptions = {
         text: {
             message: 'N0n Sample Snackbar',
             action: 'Close',
@@ -26,14 +26,39 @@ window.N0nSnackbar = (function () {
         width: 'auto',
         autoShow: true,
         showAction: true,
+        waitQueue: false,
         position: 'top-right',
         duration: 2000,
         customClass: '',
-        onActionClick: function (isntance) {},
-        onButtonClick: function (instance) {},
-        onClose: function (instance) {}
+        onActionClick: function (event) {},
+        onButtonClick: function (event) {},
+        onShow: function (container) {},
+        onClose: function (container) {}
     },
-        $body = $('body');
+        $body = $('body'),
+        $isShowing = false,
+        $queueList = [],
+        $_queueList = [];
+
+    function processQueue() {
+        if ($isShowing || 0 === $queueList.length) {
+            return;
+        }
+
+        var opt = $queueList.shift(),
+            bar;
+
+        if (0 !== $_queueList.length && 0 === $queueList.length) {
+            $queueList = $_queueList;
+            $_queueList = [];
+        }
+
+        opt.autoShow = false;
+
+        bar = N0nSnackbar.create(opt);
+        bar._isInQueue = true;
+        bar.show();
+    }
 
     var N0nSnackbar = function (elem, options) {
         if (!(this instanceof N0nSnackbar)) {
@@ -66,34 +91,62 @@ window.N0nSnackbar = (function () {
             return this;
         }
 
+        if (!this._isInQueue) {
+            if (this.options.waitQueue) {
+                if (-1 === $queueList.indexOf(this.options)) {
+                    $queueList.push(this.options);
+                    processQueue();
+                }
+
+                return this;
+            }
+
+            $queueList.unshift(this.options);
+            processQueue();
+
+            return this;
+        }
+
         this.hasShowed = true;
 
         $body.append(this.container);
 
+        try {
+            if (false === this.options.onShow.bind(this)(this.container)) {
+                return this;
+            }
+        } catch (err) {}
+
         setTimeout(function () {
+            $isShowing = true;
+
             this.container.css('opacity', 1)
-                .addClass('snackbar-pos ' + this.options.position);
-        }.bind(this), 0);
+                .attr('data-n0n-sposition', this.options.position);
 
-        if (0 >= this.options.duration) {
-            return this;
-        }
+            if (0 >= this.options.duration) {
+                return this;
+            }
 
-        setTimeout(function () {
-            this.hide('lazy');
-        }.bind(this), this.options.duration);
+            setTimeout(function () {
+                this.hide('lazy');
+            }.bind(this), this.options.duration);
+        }.bind(this), 10);
 
         return this;
     };
 
-    N0nSnackbar.prototype.hide = function (force) {
+    N0nSnackbar.prototype.hide = function (force, isclosebutton) {
         if (true === force) {
             this.container.remove();
             return this;
         }
 
+        var remove = true;
+
         try {
-            this.options.onClose.bind(this)();
+            if (false === this.options.onClose.bind(this)(this.container)) {
+                remove = false;
+            }
         } catch (err) {}
 
         var css = {
@@ -109,9 +162,29 @@ window.N0nSnackbar = (function () {
 
         this.container.css(css);
 
-        setTimeout(function () {
-            this.hide(true);
-        }.bind(this), parseFloat(this.container.css('transition-duration'), 0.5) * 1000);
+        var closecallback = function () {
+            $isShowing = false;
+
+            if (!this._closedByButton) {
+                processQueue();
+            }
+
+            if (isclosebutton) {
+                this._closedByButton = true;
+            }
+
+            if (remove) {
+                this.hide(true);
+            }
+        }.bind(this);
+
+        if (!remove) {
+            closecallback();
+            return this;
+        }
+
+        setTimeout(closecallback, N0nSnackbar.timeout * 1000);
+        return this;
     };
 
     N0nSnackbar.prototype.addButton = function (text, arialabel, color, callback, isclosebutton) {
@@ -130,18 +203,18 @@ window.N0nSnackbar = (function () {
         callback = callback.bind(this);
 
         var $btn = $(this.options.template.button)
-            .addClass('action')
+            .addClass('n0n-btn-action')
             .css('color', color)
             .attr('aria-label', arialabel)
             .on('click', function (evt) {
                 evt.preventDefault();
 
                 if (isclosebutton) {
-                    this.hide();
+                    this.hide(false, true);
                 }
 
                 try {
-                    this.options.onButtonClick(evt);
+                    this.options.onButtonClick.bind(this)(evt);
                 } catch (err) {}
 
                 callback(evt);
@@ -159,6 +232,16 @@ window.N0nSnackbar = (function () {
         return this;
     };
 
+    var $testbar = $('<div class="n0n-snackbar"></div>').css({
+        visibility: 'hidden',
+        width: 0,
+        height: 0
+    }).appendTo($body);
+
+    N0nSnackbar.timeout = parseFloat($testbar.css('transition-duration'), 0.5);
+
+    $testbar.remove();
+
     N0nSnackbar.create = function ($options, customclass, duration) {
         if ('string' === typeof $options) {
             $options = {
@@ -170,17 +253,17 @@ window.N0nSnackbar = (function () {
             };
         }
 
-        var options = $.extend(true, $defaults, $options);
+        var options = $.extend(true, {}, $defaultOptions, $options);
 
         var $alert = $(options.template.container)
-            .addClass('snackbar-container ' + options.customClass)
+            .addClass('n0n-snackbar ' + options.customClass)
             .css({
                 width: options.width,
                 background: options.color.background
             })
             .append(
                 $(options.template.text)
-                    .addClass('snackbar-text')
+                    .addClass('n0n-snackbar-text')
                     .css('color', options.color.text)
                     .html(options.text.message)
             );
@@ -201,14 +284,32 @@ window.N0nSnackbar = (function () {
         return $snackbar;
     };
 
-    N0nSnackbar.hideAll = function () {
-        $('.snackbar-container').each(function (_i, el) {
-            $(el).data($NAMESPACE).hide('lazy');
+    N0nSnackbar.hideAll = function (force) {
+        $('.n0n-snackbar').each(function (_i, el) {
+            $(el).data($NAMESPACE).hide(force ? true : 'lazy');
         });
     };
 
-    N0nSnackbar.configure = function (defaults) {
-        $defaults = $.extend(true, $defaults, defaults);
+    N0nSnackbar.configure = function (defaults, timeout) {
+        $defaultOptions = $.extend(true, $defaultOptions, defaults);
+
+        if ('number' === typeof timeout) {
+            N0nSnackbar.timeout = timeout;
+        }
+    };
+
+    N0nSnackbar.pushQueue = function () {
+        var list = [].slice.call(arguments);
+
+        if (0 === list.length) {
+            return;
+        }
+
+        $.each(list, function (_i, options) {
+            $queueList.push(options || {});
+        });
+
+        processQueue();
     };
 
     return N0nSnackbar;
